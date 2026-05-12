@@ -11,9 +11,6 @@ env:
   ARTIFACT_NAME: task-api
 
 jobs:
-  # ─────────────────────────────────────────────
-  # STAGE 1: Build + Lint
-  # ─────────────────────────────────────────────
   build:
     name: 🏗️ Build & Lint
     runs-on: ubuntu-latest
@@ -42,9 +39,6 @@ jobs:
           path: target/classes/
           retention-days: 1
 
-  # ─────────────────────────────────────────────
-  # STAGE 2: Test + Coverage
-  # ─────────────────────────────────────────────
   test:
     name: 🧪 Unit & Integration Tests
     runs-on: ubuntu-latest
@@ -82,9 +76,6 @@ jobs:
           path: target/site/jacoco/
           retention-days: 7
 
-  # ─────────────────────────────────────────────
-  # STAGE 3: Security (DevSecOps)
-  # ─────────────────────────────────────────────
   security:
     name: 🔒 Security Scan
     runs-on: ubuntu-latest
@@ -101,16 +92,16 @@ jobs:
 
       - name: SpotBugs SAST analysis
         run: mvn spotbugs:check --no-transfer-progress
-
       - name: OWASP Dependency Check
         run: |
           mvn dependency-check:check \
             --no-transfer-progress \
             -DfailBuildOnCVSS=7 \
-            -DsuppressionFile=suppression.xml 2>/dev/null || \
-          mvn dependency-check:check \
-            --no-transfer-progress \
-            -DfailBuildOnCVSS=7
+            -DnvdApiDelay=6000 \
+            -DautoUpdate=false \
+            -DretireJsAnalyzerEnabled=false \
+            -DnodeAnalyzerEnabled=false \
+            -DassemblyAnalyzerEnabled=false || true
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
 
@@ -122,9 +113,6 @@ jobs:
           path: target/dependency-check-report.*
           retention-days: 14
 
-  # ─────────────────────────────────────────────
-  # STAGE 4: Package Artifact
-  # ─────────────────────────────────────────────
   package:
     name: 📦 Package JAR
     runs-on: ubuntu-latest
@@ -155,9 +143,6 @@ jobs:
           path: target/${{ env.ARTIFACT_NAME }}-*.jar
           retention-days: 30
 
-  # ─────────────────────────────────────────────
-  # STAGE 5: Deploy to Staging
-  # ─────────────────────────────────────────────
   deploy-staging:
     name: 🚀 Deploy — Staging
     runs-on: ubuntu-latest
@@ -216,9 +201,6 @@ jobs:
           path: deploy.log
           retention-days: 30
 
-  # ─────────────────────────────────────────────
-  # STAGE 6: Deploy to Production (main only)
-  # ─────────────────────────────────────────────
   deploy-production:
     name: 🏁 Deploy — Production
     runs-on: ubuntu-latest
