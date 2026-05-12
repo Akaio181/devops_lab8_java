@@ -1,0 +1,272 @@
+name: CI/CD Pipeline — Task API
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  JAVA_VERSION: '17'
+  ARTIFACT_NAME: task-api
+
+jobs:
+  # ─────────────────────────────────────────────
+  # STAGE 1: Build + Lint
+  # ─────────────────────────────────────────────
+  build:
+    name: 🏗️ Build & Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Run Checkstyle (linting)
+        run: mvn checkstyle:check --no-transfer-progress
+
+      - name: Compile application
+        run: mvn compile --no-transfer-progress -DskipTests
+
+      - name: Upload compiled classes
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiled-classes
+          path: target/classes/
+          retention-days: 1
+
+  # ─────────────────────────────────────────────
+  # STAGE 2: Test + Coverage
+  # ─────────────────────────────────────────────
+  test:
+    name: 🧪 Unit & Integration Tests
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Run tests with coverage
+        run: mvn test jacoco:report --no-transfer-progress
+
+      - name: Check coverage threshold (≥60%)
+        run: mvn jacoco:check --no-transfer-progress
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: |
+            target/surefire-reports/
+            target/site/jacoco/
+          retention-days: 7
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: target/site/jacoco/
+          retention-days: 7
+
+  # ─────────────────────────────────────────────
+  # STAGE 3: Security (DevSecOps)
+  # ─────────────────────────────────────────────
+  security:
+    name: 🔒 Security Scan
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: maven
+
+      - name: SpotBugs SAST analysis
+        run: mvn spotbugs:check --no-transfer-progress
+
+      - name: OWASP Dependency Check
+        run: |
+          mvn dependency-check:check \
+            --no-transfer-progress \
+            -DfailBuildOnCVSS=7 \
+            -DsuppressionFile=suppression.xml 2>/dev/null || \
+          mvn dependency-check:check \
+            --no-transfer-progress \
+            -DfailBuildOnCVSS=7
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+
+      - name: Upload security reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-reports
+          path: target/dependency-check-report.*
+          retention-days: 14
+
+  # ─────────────────────────────────────────────
+  # STAGE 4: Package Artifact
+  # ─────────────────────────────────────────────
+  package:
+    name: 📦 Package JAR
+    runs-on: ubuntu-latest
+    needs: [ test, security ]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build fat JAR
+        run: mvn package --no-transfer-progress -DskipTests
+
+      - name: Rename artifact with version
+        run: |
+          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+          echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
+          cp target/task-api-*.jar target/${{ env.ARTIFACT_NAME }}-${VERSION}.jar
+
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}-jar
+          path: target/${{ env.ARTIFACT_NAME }}-*.jar
+          retention-days: 30
+
+  # ─────────────────────────────────────────────
+  # STAGE 5: Deploy to Staging
+  # ─────────────────────────────────────────────
+  deploy-staging:
+    name: 🚀 Deploy — Staging
+    runs-on: ubuntu-latest
+    needs: package
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download JAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}-jar
+          path: deploy/
+
+      - name: Deploy to Staging (simulated)
+        env:
+          JWT_SECRET: ${{ secrets.JWT_SECRET_STAGING }}
+          DEPLOY_ENV: staging
+        run: |
+          echo "════════════════════════════════════════"
+          echo "  DEPLOYING TO STAGING ENVIRONMENT"
+          echo "════════════════════════════════════════"
+          echo "Artifact: $(ls deploy/)"
+          echo "Environment: $DEPLOY_ENV"
+          echo "JWT_SECRET set: ${{ secrets.JWT_SECRET_STAGING != '' }}"
+          echo ""
+          echo "Simulating deployment steps:"
+          echo "  [1/4] Pulling latest artifact..."
+          sleep 1
+          echo "  [2/4] Stopping old instance..."
+          sleep 1
+          echo "  [3/4] Starting app with profile=staging..."
+          # Real command would be:
+          # java -jar deploy/*.jar --spring.profiles.active=staging
+          sleep 1
+          echo "  [4/4] Health check..."
+          sleep 1
+          echo ""
+          echo "✅ Staging deployment successful!"
+          echo "   URL: https://staging.task-api.example.com"
+
+      - name: Generate deployment log
+        run: |
+          echo "Deployment Log — $(date -u '+%Y-%m-%d %H:%M:%S UTC')" > deploy.log
+          echo "Environment: staging" >> deploy.log
+          echo "Artifact: $(ls deploy/)" >> deploy.log
+          echo "Status: SUCCESS" >> deploy.log
+          echo "Commit: ${{ github.sha }}" >> deploy.log
+          cat deploy.log
+
+      - name: Upload deployment log
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-log-staging
+          path: deploy.log
+          retention-days: 30
+
+  # ─────────────────────────────────────────────
+  # STAGE 6: Deploy to Production (main only)
+  # ─────────────────────────────────────────────
+  deploy-production:
+    name: 🏁 Deploy — Production
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    if: github.ref == 'refs/heads/main'
+    environment: production
+
+    steps:
+      - name: Download JAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}-jar
+          path: deploy/
+
+      - name: Deploy to Production (simulated)
+        env:
+          JWT_SECRET: ${{ secrets.JWT_SECRET_PROD }}
+          DEPLOY_ENV: production
+        run: |
+          echo "════════════════════════════════════════"
+          echo "  DEPLOYING TO PRODUCTION ENVIRONMENT"
+          echo "════════════════════════════════════════"
+          echo "Artifact: $(ls deploy/)"
+          echo "Environment: $DEPLOY_ENV"
+          echo ""
+          echo "Simulating production deployment:"
+          echo "  [1/5] Pre-deployment checks..."
+          echo "  [2/5] Blue/green switch..."
+          echo "  [3/5] Starting new instance..."
+          # Real: java -jar deploy/*.jar --spring.profiles.active=production
+          echo "  [4/5] Smoke tests..."
+          echo "  [5/5] Monitoring dashboards updated."
+          echo ""
+          echo "✅ Production deployment successful!"
+          echo "   URL: https://task-api.example.com"
+
+      - name: Generate deployment log
+        run: |
+          echo "Deployment Log — $(date -u '+%Y-%m-%d %H:%M:%S UTC')" > deploy-prod.log
+          echo "Environment: production" >> deploy-prod.log
+          echo "Artifact: $(ls deploy/)" >> deploy-prod.log
+          echo "Status: SUCCESS" >> deploy-prod.log
+          echo "Commit: ${{ github.sha }}" >> deploy-prod.log
+          cat deploy-prod.log
+
+      - name: Upload production deployment log
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-log-production
+          path: deploy-prod.log
+          retention-days: 90
