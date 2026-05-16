@@ -134,13 +134,14 @@ jobs:
         run: |
           VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
           echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
-          cp target/task-api-*.jar target/${{ env.ARTIFACT_NAME }}-${VERSION}.jar
-
+          mkdir -p artifacts
+          cp target/${{ env.ARTIFACT_NAME }}-${VERSION}.jar artifacts/${{ env.ARTIFACT_NAME }}-${VERSION}.jar
+      
       - name: Upload JAR artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}-jar
-          path: target/${{ env.ARTIFACT_NAME }}-*.jar
+          path: artifacts/${{ env.ARTIFACT_NAME }}-*.jar
           retention-days: 30
 
   deploy-staging:
